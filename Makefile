@@ -13,8 +13,7 @@ LIBS     = -lexpat -lssl -lresolv
 CPPFLAGS = -DVERSION="$(VERSION)"
 CFLAGS   = -std=gnu11 ${INCS} ${CPPFLAGS}
 LDFLAGS  = ${LIBS}
-INCS     = -Isource/ \
-           -I/usr/include/
+INCS     = -Iinclude/ -Isource/ -I/usr/include/
 
 # commands
 COMPILE = ${CC} ${CFLAGS} -c -o $@ $<
@@ -26,8 +25,8 @@ CLEAN   = @rm -f
 #------------------------------------------------------------------------------
 # library macros
 BIN  = acc
-SRCS = source/auth.c \
-       source/basic.c \
+SRCS = source/main.c \
+       source/auth.c \
        source/conn.c \
        source/ctx.c \
        source/event.c \
