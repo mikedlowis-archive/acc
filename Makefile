@@ -13,7 +13,7 @@ LIBS     = -lexpat -lssl -lresolv
 CPPFLAGS = -DVERSION="$(VERSION)"
 CFLAGS   = -std=gnu11 ${INCS} ${CPPFLAGS}
 LDFLAGS  = ${LIBS}
-INCS     = -Iinclude/ -Isource/ -I/usr/include/
+INCS     = -Iinclude/ -Isource/ -I/usr/include/ -I/opt/local/include/
 
 # commands
 COMPILE = ${CC} ${CFLAGS} -c -o $@ $<
