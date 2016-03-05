@@ -14,12 +14,17 @@ char* Server = NULL;
 int   Port   = 5222;
 long  Flags  = 0;
 
+xmpp_ctx_t*  Ctx;
+xmpp_conn_t* Conn;
+
 static void usage(void);
 static void load_config(void);
-void conn_handler(xmpp_conn_t * const conn, const xmpp_conn_event_t status,
-                  const int error, xmpp_stream_error_t * const stream_error,
-                  void * const userdata);
-int handle_reply(xmpp_conn_t * const conn, xmpp_stanza_t * const stanza, void * const userdata);
+void onconnect(xmpp_conn_t * const conn, const xmpp_conn_event_t status,
+               const int error, xmpp_stream_error_t * const stream_error,
+               void * const userdata);
+int onreceive(xmpp_conn_t * const conn, xmpp_stanza_t * const stanza, void * const userdata);
+void sendmsg(char* recipient, char* message);
+//int handle_roster(xmpp_conn_t * const conn, xmpp_stanza_t * const stanza, void * const userdata);
 
 int main(int argc, char** argv)
 {
@@ -33,18 +38,18 @@ int main(int argc, char** argv)
     /* Start the connection */
     xmpp_initialize();
     xmpp_log_t*  log  = xmpp_get_default_logger(XMPP_LEVEL_DEBUG);
-    xmpp_ctx_t*  ctx  = xmpp_ctx_new(NULL, log);
-    xmpp_conn_t* conn = xmpp_conn_new(ctx);
+    Ctx  = xmpp_ctx_new(NULL, log);
+    Conn = xmpp_conn_new(Ctx);
     /* setup authentication information and connect */
-    xmpp_conn_set_flags(conn, Flags);
-    xmpp_conn_set_jid(conn,  User);
-    xmpp_conn_set_pass(conn, Pass);
-    xmpp_connect_client(conn, Server, Port, conn_handler, ctx);
+    xmpp_conn_set_flags(Conn, Flags);
+    xmpp_conn_set_jid(Conn,  User);
+    xmpp_conn_set_pass(Conn, Pass);
+    xmpp_connect_client(Conn, Server, Port, onconnect, Ctx);
     /* enter the event loop our connect handler will trigger an exit */
-    xmpp_run(ctx);
+    xmpp_run(Ctx);
     /* gracefully shut everything down */
-    xmpp_conn_release(conn);
-    xmpp_ctx_free(ctx);
+    xmpp_conn_release(Conn);
+    xmpp_ctx_free(Ctx);
     xmpp_shutdown();
     return 0;
 }
@@ -71,75 +76,82 @@ static void load_config(void)
     }
 }
 
-void conn_handler(xmpp_conn_t * const conn, const xmpp_conn_event_t status,
-                  const int error, xmpp_stream_error_t * const stream_error,
-                  void * const userdata)
+void onconnect(xmpp_conn_t * const conn, const xmpp_conn_event_t status,
+               const int error, xmpp_stream_error_t * const stream_error,
+               void * const userdata)
 {
-    xmpp_ctx_t *ctx = (xmpp_ctx_t *)userdata;
-    xmpp_stanza_t *iq, *query;
-    int secured;
-
     if (status == XMPP_CONN_CONNECT) {
-        fprintf(stderr, "DEBUG: connected\n");
-        secured = xmpp_conn_is_secured(conn);
-        fprintf(stderr, "DEBUG: connection is %s.\n",
-                secured ? "secured" : "NOT secured");
-
-        /* create iq stanza for request */
-        iq = xmpp_stanza_new(ctx);
-        xmpp_stanza_set_name(iq, "iq");
-        xmpp_stanza_set_type(iq, "get");
-        xmpp_stanza_set_id(iq, "roster1");
-
-        query = xmpp_stanza_new(ctx);
-        xmpp_stanza_set_name(query, "query");
-        xmpp_stanza_set_ns(query, XMPP_NS_ROSTER);
-
-        xmpp_stanza_add_child(iq, query);
-
-        /* we can release the stanza since it belongs to iq now */
-        xmpp_stanza_release(query);
-
-        /* set up reply handler */
-        xmpp_id_handler_add(conn, handle_reply, "roster1", ctx);
-
-        /* send out the stanza */
-        xmpp_send(conn, iq);
-
-        /* release the stanza */
-        xmpp_stanza_release(iq);
+        xmpp_handler_add(Conn, onreceive, NULL, "message", NULL, Ctx);
+        /* Anounce presence */
+        xmpp_stanza_t* pres = xmpp_stanza_new(Ctx);
+        xmpp_stanza_set_name(pres, "presence");
+        xmpp_send(Conn, pres);
+        xmpp_stanza_release(pres);
     } else {
         fprintf(stderr, "DEBUG: disconnected\n");
-        xmpp_stop(ctx);
+        xmpp_stop(Ctx);
     }
 }
 
-int handle_reply(xmpp_conn_t * const conn, xmpp_stanza_t * const stanza, void * const userdata)
+int onreceive(xmpp_conn_t * const conn, xmpp_stanza_t * const stanza, void * const userdata)
 {
-    xmpp_stanza_t *query, *item;
-    char *type, *name;
-
-    type = xmpp_stanza_get_type(stanza);
-    if (strcmp(type, "error") == 0) {
-        fprintf(stderr, "ERROR: query failed\n");
-    } else {
-        query = xmpp_stanza_get_child_by_name(stanza, "query");
-        printf("Roster:\n");
-        for (item = xmpp_stanza_get_children(query); item; item = xmpp_stanza_get_next(item))
-            if ((name = xmpp_stanza_get_attribute(item, "name")))
-                printf("\t %s (%s) sub=%s\n",
-                       name,
-                       xmpp_stanza_get_attribute(item, "jid"),
-                       xmpp_stanza_get_attribute(item, "subscription"));
-            else
-                printf("\t %s sub=%s\n",
-                       xmpp_stanza_get_attribute(item, "jid"),
-                       xmpp_stanza_get_attribute(item, "subscription"));
-        printf("END OF LIST\n");
-    }
-
-    /* disconnect */
-    xmpp_disconnect(conn);
-
-    return 0;
+    printf("============================================================\n");
+    /* error checking */
+    if(!xmpp_stanza_get_child_by_name(stanza, "body"))
+        return 1;
+    if(xmpp_stanza_get_type(stanza) !=NULL && !strcmp(xmpp_stanza_get_type(stanza), "error"))
+        return 1;
+    /* Print received message */
+    char* intext = xmpp_stanza_get_text(xmpp_stanza_get_child_by_name(stanza, "body"));
+    printf("Incoming message from %s: %s\n", xmpp_stanza_get_from(stanza), intext);
+    /* Reply to the message */
+    sendmsg(xmpp_stanza_get_attribute(stanza, "from"), "hello to you too!");
+    return 1;
 }
+
+void sendmsg(char* recipient, char* message)
+{
+    xmpp_stanza_t* msg = xmpp_stanza_new(Ctx);
+    xmpp_stanza_set_name(msg, "message");
+    xmpp_stanza_set_attribute(msg, "to", recipient);
+    xmpp_stanza_set_attribute(msg, "type", "chat");
+    xmpp_stanza_t* newbody = xmpp_stanza_new(Ctx);
+    xmpp_stanza_set_name(newbody, "body");
+    xmpp_stanza_t* text = xmpp_stanza_new(Ctx);
+    xmpp_stanza_set_text(text, message);
+    xmpp_stanza_add_child(newbody, text);
+    xmpp_stanza_add_child(msg, newbody);
+    xmpp_send(Conn, msg);
+    xmpp_stanza_release(msg);
+}
+
+//int handle_roster(xmpp_conn_t * const conn, xmpp_stanza_t * const stanza, void * const userdata)
+//{
+//    xmpp_stanza_t *query, *item;
+//    char *type, *name;
+//
+//    type = xmpp_stanza_get_type(stanza);
+//    if (strcmp(type, "error") == 0) {
+//        fprintf(stderr, "ERROR: query failed\n");
+//    } else {
+//        query = xmpp_stanza_get_child_by_name(stanza, "query");
+//        printf("Roster:\n");
+//        for (item = xmpp_stanza_get_children(query); item; item = xmpp_stanza_get_next(item))
+//            if ((name = xmpp_stanza_get_attribute(item, "name")))
+//                printf("\t %s (%s) sub=%s\n",
+//                       name,
+//                       xmpp_stanza_get_attribute(item, "jid"),
+//                       xmpp_stanza_get_attribute(item, "subscription"));
+//            else
+//                printf("\t %s sub=%s\n",
+//                       xmpp_stanza_get_attribute(item, "jid"),
+//                       xmpp_stanza_get_attribute(item, "subscription"));
+//        printf("END OF LIST\n");
+//    }
+//
+//    /* disconnect */
+//    xmpp_disconnect(conn);
+//
+//    return 0;
+//}
+
